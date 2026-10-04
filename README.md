@@ -1,4 +1,6 @@
-# Programmable Settlement
+# SOLstice
+
+## Programmable Settlement
 
 A devnet-only proof that turns a plain-language real-world condition into an on-chain settlement rule:
 
