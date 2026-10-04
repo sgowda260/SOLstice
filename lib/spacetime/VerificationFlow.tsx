@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import {
   Controls, Handle, Position, ReactFlow, ReactFlowProvider,
   useEdgesState, useNodesState, useReactFlow,
@@ -81,7 +82,7 @@ function buildGraph(condition: Condition | undefined, checks: readonly Verificat
     : condition.settlementStatus === "failed" ? "failed" : condition.finalResult === true && condition.settlementStatus === "ready" ? "ready" : "locked";
   nodes.push({ id: "settlement", type: "graphCard", position: { x: 1180, y: resolutionY }, data: {
     kind: "settlement", eyebrow: "05 · SOLANA DEVNET", title: settlement === "ready" ? "Release available" : settlement === "confirmed" ? "Funds released" : settlement === "submitted" ? "Release submitted" : settlement === "failed" ? "Release failed" : "Settlement locked",
-    detail: settlement === "ready" ? "Automatic release queued" : condition.settlementSignature ? "Transaction signature available" : "Devnet escrow", status: settlement, tone: statusTone(settlement), animate: true,
+    detail: settlement === "ready" ? "Manual release available" : condition.settlementSignature ? "Transaction signature available" : "Devnet escrow", status: settlement, tone: statusTone(settlement), animate: true,
   } });
   edges.push({ id: "resolution-settlement", source: "resolution", target: "settlement", type: "smoothstep", animated: settlement === "ready", style: { stroke: settlement === "ready" || settlement === "confirmed" ? "#57d7a0" : "#58616d", strokeWidth: 1.7 } });
   return { nodes, edges };
@@ -159,7 +160,6 @@ export function VerificationFlow({ demoDeal, onCreateDemoDeal, creatingDeal = fa
   const setCheckError = useReducer(reducers.setCheckError);
   const addEvidence = useReducer(reducers.addEvidence);
   const resolveCondition = useReducer(reducers.resolveCondition);
-  const recordSettlementStatus = useReducer(reducers.recordSettlementStatus);
   const associateDemoDeal = useReducer(reducers.associateDemoDeal);
   const updateConditionPrompt = useReducer(reducers.updateConditionPrompt);
   const updateVerificationCheck = useReducer(reducers.updateVerificationCheck);
@@ -239,12 +239,9 @@ export function VerificationFlow({ demoDeal, onCreateDemoDeal, creatingDeal = fa
       else await completeCheck({ checkId: check.id, passed: checkResult.status === "passed", summary: checkResult.summary });
     }
     await resolveCondition({ conditionId: selectedCondition.id, result: result.result === true });
-    setNotice(result.result ? "Condition verified. Continuing to the Solana Devnet settlement." : "Verification finished. The condition did not pass all checks.");
+    setNotice(result.result ? "Verification complete. Review and confirm a Devnet release when you are ready." : "Verification finished. The condition did not pass all checks.");
     if (result.result === true) {
-      const currentDeal = selectedCondition.dealId ? settlementDeal : demoDeal;
-      const currentDealId = selectedCondition.dealId ?? (demoDeal?.funded ? BigInt(demoDeal.dealId) : undefined);
       if (!selectedCondition.dealId && demoDeal?.funded) await associateDemoDeal({ conditionId: selectedCondition.id, dealId: BigInt(demoDeal.dealId) });
-      if (currentDealId && currentDeal?.funded && selectedCondition.settlementStatus !== "confirmed" && selectedCondition.settlementStatus !== "submitted") await releaseForCondition(selectedCondition, currentDealId);
     }
   });
   const runVerificationRef = useRef(runVerification);
@@ -271,21 +268,12 @@ export function VerificationFlow({ demoDeal, onCreateDemoDeal, creatingDeal = fa
     return () => window.clearTimeout(timer);
   }, [selectedCondition?.id, selectedCondition?.status, triggerCondition]);
   const releaseForCondition = async (condition: Condition, targetDealId: bigint) => {
-    if (condition.finalResult === false || condition.settlementStatus === "confirmed" || condition.settlementStatus === "submitted" || releaseBusy) return;
+    if (condition.finalResult !== true || condition.settlementStatus !== "ready" || condition.settlementSignature || releaseBusy) return;
     setReleaseBusy(true);
     try {
-      await recordSettlementStatus({ conditionId: condition.id, status: "submitted", signature: undefined });
-    } catch {
-      setReleaseBusy(false);
-      return;
-    }
-    try {
-      const signature = await requestRelease(Number(targetDealId));
-      await recordSettlementStatus({ conditionId: condition.id, status: "confirmed", signature });
-      await setConditionStatus({ conditionId: condition.id, status: "executed" });
+      await requestRelease(Number(targetDealId), condition.id.toString());
       setNotice("Settlement confirmed on Solana Devnet.");
     } catch {
-      await recordSettlementStatus({ conditionId: condition.id, status: "failed", signature: undefined });
       setNotice(SAFE_RELEASE_ERROR);
     } finally { setReleaseBusy(false); }
   };
@@ -298,7 +286,6 @@ export function VerificationFlow({ demoDeal, onCreateDemoDeal, creatingDeal = fa
     if (!selectedCondition || !demoDeal?.funded) throw new Error("Create and fund a Devnet deal first.");
     await associateDemoDeal({ conditionId: selectedCondition.id, dealId: BigInt(demoDeal.dealId) });
     setAssociatedDeal(demoDeal); setNotice("Funded Devnet deal linked to this condition.");
-    if (selectedCondition.finalResult === true) await releaseForCondition(selectedCondition, BigInt(demoDeal.dealId));
   });
   const editAsNew = () => { if (selectedCondition) { setPrompt(selectedCondition.prompt); setFiles([]); setSubmittedFingerprint(""); setDraftMode(true); setSelectedId(undefined); setSelectedNode(undefined); setNotice("Draft copied. Generate a plan to create a new condition."); } };
   const startNew = () => { setDraftMode(true); setSelectedId(undefined); setSelectedNode(undefined); setPrompt(""); setFiles([]); setNotice("Describe what must become true before settlement executes."); setHistoryOpen(false); };
@@ -315,9 +302,16 @@ export function VerificationFlow({ demoDeal, onCreateDemoDeal, creatingDeal = fa
   const selectedNodeKind = selectedNode === "condition" ? "condition" : selectedNode === "resolution" ? "resolution" : selectedNode === "settlement" ? "settlement" : selectedNode?.startsWith("plan-") ? "plan" : selectedNode?.startsWith("result-") ? "result" : undefined;
 
   const executionView = selectedCondition?.finalResult === true;
-  if (executionView && selectedCondition) return <ExecutionView condition={selectedCondition} checks={flowChecks} deal={settlementDeal} fundedDemoDeal={demoDeal} conditions={conditions} releaseBusy={releaseBusy} onNew={startNew} onOpenCondition={openCondition} onCreateDeal={onCreateDemoDeal} creatingDeal={creatingDeal} onLinkDeal={linkDeal} />;
+  if (executionView && selectedCondition) return <ExecutionView condition={selectedCondition} checks={flowChecks} deal={settlementDeal} fundedDemoDeal={demoDeal} conditions={conditions} releaseBusy={releaseBusy} onNew={startNew} onOpenCondition={openCondition} onCreateDeal={onCreateDemoDeal} creatingDeal={creatingDeal} onLinkDeal={linkDeal} onRelease={() => {
+    if (!settlementDeal?.funded) return;
+    const amountSol = settlementDeal.amountLamports === undefined ? "the escrowed amount" : `${(settlementDeal.amountLamports / 1_000_000_000).toFixed(3)} SOL`;
+    const recipient = settlementDeal.recipient ? ` to ${settlementDeal.recipient}` : "";
+    if (window.confirm(`Release ${amountSol}${recipient} from this escrow on Solana Devnet? This sends an on-chain transaction.`)) {
+      void releaseForCondition(selectedCondition, BigInt(settlementDeal.dealId));
+    }
+  }} />;
   return <main className="decision-app">
-    <header className="decision-header"><button className="brand-mark" aria-label="New condition" onClick={startNew}>CS</button><div className="brand-copy"><strong>PROGRAMMABLE SETTLEMENT</strong><span>REAL-WORLD CONDITIONS, EXECUTED ON-CHAIN</span></div><div className="history-actions"><button className="history-button" onClick={startNew}>＋ New condition</button><button className="history-button" onClick={() => setHistoryOpen(true)}>History <span>{conditions.length}</span></button></div><div className="connection-badge"><span className={`live-dot ${isActive ? "is-live" : ""}`} />{connectionError ? "OFFLINE" : isActive ? "DEVNET · LIVE" : "CONNECTING"}</div>
+    <header className="decision-header"><button className="brand-mark" aria-label="New condition" onClick={startNew}>CS</button><div className="brand-copy"><strong>PROGRAMMABLE SETTLEMENT</strong><span>REAL-WORLD CONDITIONS, EXECUTED ON-CHAIN</span></div><div className="history-actions"><Link href="/" className="flow-agent-link">Agent console ↗</Link><button className="history-button" onClick={startNew}>＋ New condition</button><button className="history-button" onClick={() => setHistoryOpen(true)}>History <span>{conditions.length}</span></button></div><div className="connection-badge"><span className={`live-dot ${isActive ? "is-live" : ""}`} />{connectionError ? "OFFLINE" : isActive ? "DEVNET · LIVE" : "CONNECTING"}</div>
       <button className="deal-button" disabled={creatingDeal || Boolean(demoDeal?.funded && !demoDeal.released)} onClick={onCreateDemoDeal}>{creatingDeal ? "Creating deal…" : demoDeal?.funded && !demoDeal.released ? "Devnet deal funded" : "Create funded Devnet deal"}</button>
     </header>
     <section className="canvas-shell" aria-label="Interactive verification decision graph">
@@ -340,7 +334,7 @@ export function VerificationFlow({ demoDeal, onCreateDemoDeal, creatingDeal = fa
       {(selectedNodeKind === "plan" || selectedNodeKind === "result") && selectedCheck && <div className="drawer-content"><StatePill tone={selectedNodeKind === "plan" ? "active" : statusTone(selectedCheck.status === "pending" ? "pending" : selectedCheck.status === "complete" ? selectedCheck.passed ? "passed" : "failed" : selectedCheck.status)}>{selectedNodeKind === "plan" ? selectedCheck.kind : selectedCheck.status === "complete" ? selectedCheck.passed ? "passed" : "failed" : selectedCheck.status}</StatePill>{selectedNodeKind === "plan" && selectedCondition?.status === "planning" ? <><label className="edit-label">PROPOSED CHECK<input className="drawer-editor" key={`${selectedCheck.id}-label`} defaultValue={selectedCheck.label} onBlur={(event) => { if (event.target.value !== selectedCheck.label) void saveCheck(selectedCheck, event.target.value, selectedCheck.instruction); }} /></label><label className="edit-label">INSTRUCTION<textarea className="drawer-editor" key={`${selectedCheck.id}-instruction`} defaultValue={selectedCheck.instruction} onBlur={(event) => { if (event.target.value !== selectedCheck.instruction) void saveCheck(selectedCheck, selectedCheck.label, event.target.value); }} /></label></> : <><h3 className="drawer-primary">{selectedCheck.label}</h3><DetailRow label="Instruction" value={selectedCheck.instruction} /></>}<DetailRow label="Check type" value={selectedCheck.kind} /><DetailRow label="Current status" value={selectedCheck.status === "complete" ? selectedCheck.passed ? "Passed" : "Failed" : selectedCheck.status} /><DetailRow label="Required" value="Yes" />{selectedCheck.summary && <DetailRow label="Evaluation" value={selectedCheck.summary} />}
         {selectedNodeKind === "result" && <><div className="drawer-section-title">EVIDENCE · {selectedEvidence.length}</div>{selectedEvidence.length ? selectedEvidence.map((item) => <article key={item.id.toString()} className="evidence-item"><div className="evidence-meta">{item.sourceType}{item.authorOrSource ? ` · ${item.authorOrSource}` : ""}</div><strong>{item.url ? <a href={item.url} target="_blank" rel="noopener noreferrer">{item.title} ↗</a> : item.title}</strong><p>{item.snippet || "No snippet provided."}</p><time>{displayTime(item.createdAt)}</time></article>) : <div className="drawer-hint">No evidence rows are attached to this check yet. Evidence appears here when the live verification runner records it.</div>}</>}</div>}
       {selectedNodeKind === "resolution" && selectedCondition && <div className="drawer-content"><StatePill tone={statusTone(selectedCondition.finalResult === true ? "true" : selectedCondition.finalResult === false ? "false" : "pending")}>{selectedCondition.finalResult === true ? "TRUE" : selectedCondition.finalResult === false ? "FALSE" : "PENDING"}</StatePill><h3 className="drawer-primary">{selectedCondition.finalResult === true ? "Condition verified" : selectedCondition.finalResult === false ? "Condition not verified" : "Verification in progress"}</h3><DetailRow label="Required checks passed" value={`${flowChecks.filter((check) => check.passed === true).length} / ${flowChecks.length}`} />{flowChecks.map((check) => <div className="outcome-row" key={check.id.toString()}><span className={`outcome-dot ${statusTone(check.status === "complete" ? check.passed ? "passed" : "failed" : check.status)}`} /><span>{check.label}</span><b>{check.status === "complete" ? check.passed ? "PASS" : "FAIL" : check.status.toUpperCase()}</b></div>)}<div className="drawer-hint">{selectedCondition.finalResult === false ? "One or more required checks did not pass, so settlement remains locked." : "The final result comes from the live verification runner."}</div></div>}
-      {selectedNodeKind === "settlement" && selectedCondition && <div className="drawer-content"><StatePill tone={statusTone(selectedCondition.settlementStatus === "ready" ? "ready" : selectedCondition.settlementStatus)}>{selectedCondition.settlementStatus === "ready" ? "READY" : selectedCondition.settlementStatus.toUpperCase()}</StatePill><h3 className="drawer-primary">{selectedCondition.settlementStatus === "ready" ? "Automatic Devnet release queued" : selectedCondition.settlementStatus === "confirmed" ? "Funds released on Devnet" : "Escrow settlement"}</h3><DetailRow label="Network" value="Solana Devnet" /><DetailRow label="Deal ID" value={dealId?.toString() ?? "Not linked"} />{settlementDeal?.amountLamports !== undefined && <DetailRow label="Amount" value={`${settlementDeal.amountLamports / 1_000_000_000} SOL`} />}{settlementDeal?.recipient && <DetailRow label="Recipient" value={settlementDeal.recipient} />}{selectedCondition.settlementSignature && <DetailRow label="Transaction" value={<a href={`https://explorer.solana.com/tx/${selectedCondition.settlementSignature}?cluster=devnet`} target="_blank" rel="noopener noreferrer">View on Solana Explorer ↗</a>} />}
+      {selectedNodeKind === "settlement" && selectedCondition && <div className="drawer-content"><StatePill tone={statusTone(selectedCondition.settlementStatus === "ready" ? "ready" : selectedCondition.settlementStatus)}>{selectedCondition.settlementStatus === "ready" ? "READY" : selectedCondition.settlementStatus.toUpperCase()}</StatePill><h3 className="drawer-primary">{selectedCondition.settlementStatus === "ready" ? "Manual Devnet release available" : selectedCondition.settlementStatus === "confirmed" ? "Funds released on Devnet" : "Escrow settlement"}</h3><DetailRow label="Network" value="Solana Devnet" /><DetailRow label="Deal ID" value={dealId?.toString() ?? "Not linked"} />{settlementDeal?.amountLamports !== undefined && <DetailRow label="Amount" value={`${settlementDeal.amountLamports / 1_000_000_000} SOL`} />}{settlementDeal?.recipient && <DetailRow label="Recipient" value={settlementDeal.recipient} />}{selectedCondition.settlementSignature && <DetailRow label="Transaction" value={<a href={`https://explorer.solana.com/tx/${selectedCondition.settlementSignature}?cluster=devnet`} target="_blank" rel="noopener noreferrer">View on Solana Explorer ↗</a>} />}
         {!dealId && demoDeal?.funded && <button className="drawer-primary-button" onClick={linkDeal}>Link current funded Devnet deal</button>}{selectedCondition.finalResult === true && !dealId && <div className="drawer-hint">Condition verified. No funded Devnet escrow is linked, so no funds have moved.</div>}{selectedCondition.settlementStatus === "submitted" && <div className="drawer-hint">TRANSACTION SUBMITTED · awaiting confirmation</div>}{selectedCondition.settlementStatus === "failed" && <div className="drawer-hint">Devnet settlement failed. No automatic retry was started.</div>}
       </div>}
       {selectedNodeKind === "condition" && selectedCondition && <button className="drawer-secondary-button" onClick={editAsNew}>Use this as a new draft</button>}
@@ -355,7 +349,7 @@ function CanvasProvider(props: { graph: { nodes: GraphNode[]; edges: Edge[] }; s
 function StatePill({ children, tone }: { children: React.ReactNode; tone: string }) { return <span className={`state-pill state-${tone}`}>{children}</span>; }
 function DetailRow({ label, value }: { label: string; value: React.ReactNode }) { return <div className="detail-row"><span>{label}</span><div>{value}</div></div>; }
 
-function ExecutionView({ condition, checks, deal, fundedDemoDeal, conditions, releaseBusy, onNew, onOpenCondition, onCreateDeal, creatingDeal, onLinkDeal }: { condition: Condition; checks: readonly VerificationCheck[]; deal?: DemoDeal; fundedDemoDeal?: DemoDeal; conditions: readonly Condition[]; releaseBusy: boolean; onNew: () => void; onOpenCondition: (condition: Condition) => void; onCreateDeal?: () => void; creatingDeal: boolean; onLinkDeal: () => void }) {
+function ExecutionView({ condition, checks, deal, fundedDemoDeal, conditions, releaseBusy, onNew, onOpenCondition, onCreateDeal, creatingDeal, onLinkDeal, onRelease }: { condition: Condition; checks: readonly VerificationCheck[]; deal?: DemoDeal; fundedDemoDeal?: DemoDeal; conditions: readonly Condition[]; releaseBusy: boolean; onNew: () => void; onOpenCondition: (condition: Condition) => void; onCreateDeal?: () => void; creatingDeal: boolean; onLinkDeal: () => void; onRelease: () => void }) {
   const confirmed = condition.settlementStatus === "confirmed" || deal?.released === true;
   const submitted = condition.settlementStatus === "submitted" || releaseBusy;
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -368,9 +362,9 @@ function ExecutionView({ condition, checks, deal, fundedDemoDeal, conditions, re
     "deal.released = true;",
   ];
   return <main className="execution-app">
-    <header className="execution-header"><button className="brand-mark" onClick={onNew} aria-label="Create new condition">CS</button><div className="brand-copy"><strong>CONDITION EXECUTION</strong><span>REAL-WORLD VERIFICATION → SOLANA SETTLEMENT</span></div><button className="history-button" onClick={() => setHistoryOpen(true)}>History</button><span className="execution-network">SOLANA DEVNET</span></header>
+    <header className="execution-header"><button className="brand-mark" onClick={onNew} aria-label="Create new condition">CS</button><div className="brand-copy"><strong>CONDITION EXECUTION</strong><span>REAL-WORLD VERIFICATION → SOLANA SETTLEMENT</span></div><Link href="/" className="flow-agent-link">Agent console ↗</Link><button className="history-button" onClick={() => setHistoryOpen(true)}>History</button><span className="execution-network">SOLANA DEVNET</span></header>
     <div className="execution-content">
-      <div className="execution-title"><span>PROGRAMMABLE CONDITION · {condition.id.toString()}</span><h1>{confirmed ? "Settlement executed." : submitted ? "Transaction submitted." : "Condition verified."}</h1><p>Off-chain verification satisfied the condition enforced by the Solana program.</p></div>
+      <div className="execution-title"><span>PROGRAMMABLE CONDITION · {condition.id.toString()}</span><h1>{confirmed ? "Settlement executed." : submitted ? "Transaction submitted." : "Condition verified."}</h1><p>Off-chain checks passed. Review the recipient and amount before confirming any Devnet release.</p></div>
       <div className="execution-chain">
         <article className="execution-step is-complete"><span>01 / RESULT</span><h2>✓ CONDITION VERIFIED</h2><code>condition_{condition.id.toString()} → true</code><div className="abstraction-code"><small>DEVELOPER ABSTRACTION · NOT A SOLANA FUNCTION</small><pre>if isConditionSatisfied() &#123;{"\n"}    releaseEscrow();{"\n"}&#125;</pre></div></article>
         <div className={`execution-signal ${confirmed || submitted ? "signal-lit" : ""}`} />
@@ -378,7 +372,7 @@ function ExecutionView({ condition, checks, deal, fundedDemoDeal, conditions, re
         <div className={`execution-signal ${confirmed ? "signal-lit" : ""}`} />
         <article className={`execution-step program-step ${confirmed ? "is-complete" : "is-active"}`}><span>03 / ON-CHAIN ENFORCEMENT · programs/conditional_escrow/src/lib.rs:32</span><h2>SOLANA PROGRAM</h2><pre>{programLines.map((line, index) => <code key={line} className={index === 2 ? "source-highlight" : ""}><i>32</i>{line}{"\n"}</code>)}</pre></article>
         <div className={`execution-signal ${confirmed ? "signal-lit" : ""}`} />
-        <article className={`execution-step ${confirmed ? "is-complete" : "is-active"}`}><span>04 / SETTLEMENT</span><h2>{confirmed ? "✓ SETTLEMENT EXECUTED" : !deal?.funded ? "NO FUNDED ESCROW LINKED" : submitted ? "TRANSACTION SUBMITTED" : "EXECUTING…"}</h2>{confirmed && deal?.amountLamports !== undefined ? <strong className="released-amount">{(deal.amountLamports / 1_000_000_000).toFixed(3)} DEVNET SOL RELEASED</strong> : !deal?.funded ? <><p>No funded Devnet escrow is linked. No funds have moved.</p>{fundedDemoDeal?.funded ? <button className="drawer-primary-button" disabled={releaseBusy} onClick={onLinkDeal}>Link funded Devnet escrow and continue</button> : onCreateDeal && <button className="drawer-primary-button" disabled={creatingDeal} onClick={onCreateDeal}>{creatingDeal ? "Creating Devnet escrow…" : "Create funded Devnet escrow"}</button>}</> : <p>Release is being confirmed on Devnet.</p>}{condition.settlementSignature && <a href={`https://explorer.solana.com/tx/${condition.settlementSignature}?cluster=devnet`} target="_blank" rel="noopener noreferrer">View on Solana Explorer ↗</a>}</article>
+        <article className={`execution-step ${confirmed ? "is-complete" : "is-active"}`}><span>04 / SETTLEMENT</span><h2>{confirmed ? "✓ SETTLEMENT EXECUTED" : !deal?.funded ? "NO FUNDED ESCROW LINKED" : submitted ? "TRANSACTION SUBMITTED" : "AWAITING YOUR CONFIRMATION"}</h2>{confirmed && deal?.amountLamports !== undefined ? <strong className="released-amount">{(deal.amountLamports / 1_000_000_000).toFixed(3)} DEVNET SOL RELEASED</strong> : !deal?.funded ? <><p>No funded Devnet escrow is linked. No funds have moved.</p>{fundedDemoDeal?.funded ? <button className="drawer-primary-button" disabled={releaseBusy} onClick={onLinkDeal}>Link funded Devnet escrow</button> : onCreateDeal && <button className="drawer-primary-button" disabled={creatingDeal} onClick={onCreateDeal}>{creatingDeal ? "Creating Devnet escrow…" : "Create funded Devnet escrow"}</button>}</> : <><p>{deal.amountLamports === undefined ? "Review the funded Devnet escrow before release." : `${(deal.amountLamports / 1_000_000_000).toFixed(3)} SOL`} {deal.recipient ? `to ${deal.recipient}` : ""}</p>{!submitted && condition.settlementStatus === "ready" && <button className="drawer-primary-button" disabled={releaseBusy} onClick={onRelease}>{releaseBusy ? "Submitting release…" : "Confirm Devnet release"}</button>}</>}{condition.settlementSignature && <a href={`https://explorer.solana.com/tx/${condition.settlementSignature}?cluster=devnet`} target="_blank" rel="noopener noreferrer">View on Solana Explorer ↗</a>}</article>
       </div>
       <div className="execution-footer"><span>{checks.length} live checks · {checks.filter((check) => check.passed === true).length} passed · {condition.settlementStatus.toUpperCase()}</span><button className="history-button" onClick={onNew}>＋ New condition</button></div>
     </div>

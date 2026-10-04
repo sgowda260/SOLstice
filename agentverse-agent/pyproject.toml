@@ -1,0 +1,10 @@
+[project]
+name = "conditional-escrow-agent"
+version = "0.1.0"
+description = "Agentverse assistant for the Conditional Escrow Devnet application"
+requires-python = ">=3.10"
+dependencies = [
+  "uagents",
+  "openai",
+  "requests",
+]

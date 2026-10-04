@@ -15,11 +15,11 @@ export function releaseLabel(finalResult: boolean | undefined, status: Settlemen
 
 export const SAFE_RELEASE_ERROR = "Release failed. Check the deal state and retry.";
 
-export async function requestRelease(dealId: number, fetcher: typeof fetch = fetch) {
+export async function requestRelease(dealId: number, conditionId: string, fetcher: typeof fetch = fetch) {
   const response = await fetcher("/api/deal/release", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ dealId }),
+    body: JSON.stringify({ dealId, conditionId, confirmed: true }),
   });
   const result = await response.json().catch(() => ({})) as { signature?: unknown };
   if (!response.ok || typeof result.signature !== "string") throw new Error(SAFE_RELEASE_ERROR);
