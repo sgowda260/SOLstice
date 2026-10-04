@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { generateVerificationPlan } from "@/lib/verification-plan-service";
+import { generateVerificationPlan, VerificationPlanError } from "@/lib/verification-plan-service";
 
 export const runtime = "nodejs";
 
@@ -36,15 +36,10 @@ export async function POST(request: Request) {
   if (documents.length > 10) return badRequest("Attach up to 10 documents.");
 
   try {
-    const plan = await generateVerificationPlan({
-      condition,
-      documents: documents.map(({ fileName, mimeType }) => ({ fileName, mimeType })),
-    });
+    const plan = await generateVerificationPlan({ condition, documents: documents.map(({ fileName, mimeType }) => ({ fileName, mimeType })) });
     return NextResponse.json(plan);
   } catch (error) {
-    if (error instanceof Error && error.message === "The planning service is not configured.") {
-      return NextResponse.json({ error: error.message }, { status: 503 });
-    }
-    return NextResponse.json({ error: "Could not generate a valid verification plan. Please try again." }, { status: 502 });
+    const failure = error instanceof VerificationPlanError ? error : new VerificationPlanError("Could not generate a valid verification plan. Please try again.", 502);
+    return NextResponse.json({ error: failure.message }, { status: failure.status });
   }
 }

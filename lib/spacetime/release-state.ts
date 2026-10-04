@@ -1,7 +1,7 @@
 export type SettlementStatus = "idle" | "ready" | "submitted" | "confirmed" | "failed" | string;
 
 export function canRelease(finalResult: boolean | undefined, status: SettlementStatus, hasDeal: boolean, submitting: boolean) {
-  return finalResult === true && status === "ready" && hasDeal && !submitting;
+  return finalResult === true && (status === "ready" || status === "failed") && hasDeal && !submitting;
 }
 
 export function releaseLabel(finalResult: boolean | undefined, status: SettlementStatus) {
@@ -19,7 +19,7 @@ export async function requestRelease(dealId: number, conditionId: string, fetche
   const response = await fetcher("/api/deal/release", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ dealId, conditionId, confirmed: true }),
+    body: JSON.stringify({ dealId, conditionId }),
   });
   const result = await response.json().catch(() => ({})) as { signature?: unknown };
   if (!response.ok || typeof result.signature !== "string") throw new Error(SAFE_RELEASE_ERROR);

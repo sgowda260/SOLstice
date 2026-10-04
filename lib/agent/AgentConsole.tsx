@@ -8,13 +8,13 @@ type AgentStatus = { ready: boolean; missing: string[]; verificationSetupMissing
 
 const starterMessage: Message = {
   role: "assistant",
-  content: "I can help you define a condition, build its verification plan, inspect saved evidence, and run the checks. I’ll keep settlement separate so you can review the Devnet release yourself.",
+  content: "I can draft a condition and plan, inspect saved evidence, link an existing funded Devnet deal, or enable a planned condition. Enabling starts its checks; if they all pass and a funded deal is linked, the app automatically attempts settlement. I only enable or link when you explicitly ask me to.",
 };
 
 const suggestions = [
   "List my conditions",
   "Draft a condition for a completed foundation milestone",
-  "What does a saved condition need before Devnet release?",
+  "What happens when I enable a condition?",
 ];
 
 export function AgentConsole() {
@@ -137,7 +137,7 @@ export function AgentConsole() {
       <Link className="agent-nav" href="/flow">⌁ <span>Verification graph</span></Link>
       <div className="agent-sidebar-bottom">
         <div className="agent-network-card"><span className="network-orb" /><div><strong>Solana Devnet</strong><small>TEST SOL ONLY</small></div><span className="agent-status-dot" /></div>
-        <p>Agent-assisted verification<br />Human-reviewed settlement</p>
+        <p>Agent-assisted verification<br />Automatic settlement on pass</p>
       </div>
     </aside>
 
@@ -148,7 +148,7 @@ export function AgentConsole() {
       </header>
 
       <div className="agent-conversation">
-        <div className="agent-intro"><div className="agent-avatar">CS</div><div><span>CONDITIONAL ESCROW SPECIALIST</span><h1>What should we verify?</h1><p>Describe a condition, ask about the evidence, or tell me to run checks on a saved condition.</p></div></div>
+        <div className="agent-intro"><div className="agent-avatar">CS</div><div><span>CONDITIONAL ESCROW SPECIALIST</span><h1>What should we verify?</h1><p>Describe a condition, inspect evidence, or explicitly enable a plan or link an existing funded deal.</p></div></div>
 
         {!ready && <div className="agent-setup-card"><div className="setup-icon">↗</div><div><strong>Connect your Agentverse agent</strong><p>Deploy the files in <code>agentverse-agent/</code>. Set <code>ASI1_API_KEY</code>, <code>AGENTVERSE_AGENT_ADDRESS</code>, and <code>AGENT_API_TOKEN</code> in the app; set <code>APP_API_BASE_URL</code> and the matching <code>APP_API_TOKEN</code> in Agentverse secrets.</p>{status?.missing?.length ? <small>Missing app settings: {status.missing.join(", ")}</small> : <small>Checking Agentverse configuration…</small>}</div></div>}
         {ready && Boolean(status?.verificationSetupMissing.length) && <div className="agent-setup-card"><div className="setup-icon">!</div><div><strong>Verification services need configuration</strong><p>The agent can chat, but planning and evidence checks need <code>XAI_API_KEY</code> and <code>FIRECRAWL_API_KEY</code> in the app's server environment.</p><small>Missing: {status?.verificationSetupMissing.join(", ")}</small></div></div>}
@@ -172,7 +172,7 @@ export function AgentConsole() {
           <textarea value={draft} maxLength={4000} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submit(draft); } }} placeholder={ready ? "Ask about a condition or describe what needs to be true…" : "Connect Agentverse to start a conversation…"} disabled={!ready || busy} rows={2} aria-label="Message the escrow agent" />
           <button type="submit" disabled={!ready || busy || !draft.trim()} aria-label="Send message">{busy ? "···" : "↑"}</button>
         </form>
-        <div className="agent-compose-note"><span>Agentverse + ASI:One · Evidence checks use public sources</span><span>Settlement requires your explicit confirmation · Devnet only</span></div>
+        <div className="agent-compose-note"><span>Agentverse + ASI:One · Evidence checks use public sources</span><span>Enable starts checks and may trigger automatic settlement · Devnet</span></div>
       </footer>
     </section>
 
@@ -181,11 +181,11 @@ export function AgentConsole() {
       <div className="approval-flow">
         <div className="approval-item is-active"><i>01</i><div><strong>Define condition</strong><small>Agent drafts and saves a plan</small></div><b>AGENT</b></div>
         <div className="approval-track" />
-        <div className="approval-item is-active"><i>02</i><div><strong>Review evidence</strong><small>Agent runs checks on request</small></div><b>AGENT</b></div>
+        <div className="approval-item is-active"><i>02</i><div><strong>Enable checks</strong><small>Starts checks when you ask</small></div><b>AGENT</b></div>
         <div className="approval-track" />
-        <div className="approval-item"><i>03</i><div><strong>Release Devnet SOL</strong><small>You inspect recipient and amount</small></div><b>YOU</b></div>
+        <div className="approval-item"><i>03</i><div><strong>Devnet settlement</strong><small>Automatic on pass with funded deal</small></div><b>APP</b></div>
       </div>
-      <div className="agent-right-note"><span>TRUST BOUNDARY</span><p>The agent can explain and verify. It cannot create a funded deal, sign a transaction, or release escrow.</p></div>
+      <div className="agent-right-note"><span>TRUST BOUNDARY</span><p>The agent cannot fund deals or sign transactions. Linking a funded deal to a passing condition can trigger settlement; the app server submits the Devnet transaction.</p></div>
       <div className="agent-right-bottom"><span>RUN HISTORY</span><Link href="/flow">Open condition graph <span>↗</span></Link></div>
     </aside>
   </main>;

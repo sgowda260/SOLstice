@@ -21,12 +21,19 @@ APP_API_TOKEN = os.environ["APP_API_TOKEN"]
 client = OpenAI(base_url=os.environ["ASI1_BASE_URL"], api_key=os.environ["ASI1_API_KEY"])
 
 SYSTEM_PROMPT = """You are the Conditional Escrow agent in a Solana Devnet demo.
-Use your tools to inspect conditions, create verification plans, and run public evidence checks.
+Use your tools to inspect conditions, create verification plans, and enable planned conditions.
 Use the returned application state as the source of truth. Distinguish observed evidence from conclusions;
 never claim that public snippets prove a real-world fact. The app stores document metadata only and does not
-read uploaded file contents. Run evidence checks only when the user explicitly asks you to run or verify them.
-You have no tool to create/fund a deal, sign a transaction, or release funds. Never claim that funds moved.
-Settlement remains a separate user-confirmed Devnet action in the application."""
+read uploaded file contents. Enabling a condition starts its saved public-source checks. If every required check
+passes and that condition is linked to a funded Devnet demo escrow, the application automatically attempts
+settlement. Before calling enable_condition, require an explicit user request to enable or activate that condition.
+If the user only asks to run/check/verify it, explain this automatic settlement behavior and ask whether they want
+to enable it. You may link an existing funded Devnet deal only when the user explicitly asks you to link it. If the
+condition is already true, linking it can immediately cause automatic settlement; explain this and require the user
+to explicitly authorize the link with that consequence in mind. A passing result without a linked funded escrow does
+not move funds. You have no tool to create or fund a deal, sign a transaction, or directly release funds. Never claim
+that funds moved unless the returned application state says settlement is confirmed; the app's server performs the
+guarded Devnet settlement."""
 
 TOOLS = [
     {
@@ -66,12 +73,28 @@ TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "run_verification",
-            "description": "Run the saved public-source checks for a condition, store their evidence/results, and update its status. This can take time and uses configured search and model services. Call only after the user explicitly asks to run verification.",
+            "name": "enable_condition",
+            "description": "Enable a planned condition and immediately run its saved public-source checks. If all required checks pass and it is linked to a funded Devnet escrow, the application automatically attempts settlement. This can have Devnet chain consequences. Call only when the user explicitly asks to enable or activate this condition; for requests only to inspect, draft, or run checks, ask before enabling.",
             "parameters": {
                 "type": "object",
                 "properties": {"condition_id": {"type": "string", "description": "The condition ID to verify."}},
                 "required": ["condition_id"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "link_funded_deal",
+            "description": "Link an existing funded, unreleased Solana Devnet demo deal to a condition. The app will reject an unfunded or released deal. If the condition already passed, linking can immediately trigger automatic settlement. Call only after the user explicitly asks to link this deal and understands that consequence when the condition is already true. This tool does not create or fund a deal.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "condition_id": {"type": "string", "description": "The condition ID from the app."},
+                    "deal_id": {"type": "string", "description": "The existing funded Devnet deal ID."},
+                },
+                "required": ["condition_id", "deal_id"],
                 "additionalProperties": False,
             },
         },
@@ -85,7 +108,7 @@ def app_request(method: str, path: str, body: dict | None = None) -> dict:
         f"{APP_API_BASE_URL}{path}",
         headers={"Authorization": f"Bearer {APP_API_TOKEN}"},
         json=body,
-        timeout=100,
+        timeout=160,
     )
     try:
         payload = response.json()
@@ -112,11 +135,17 @@ def dispatch_tool(name: str, arguments: dict) -> dict:
         if not condition or len(condition) > 2000:
             raise ValueError("Condition must be between 1 and 2,000 characters.")
         return app_request("POST", "/api/agent/conditions", {"condition": condition})
-    if name == "run_verification":
+    if name == "enable_condition":
         condition_id = str(arguments["condition_id"])
         if not condition_id.isdigit():
             raise ValueError("Condition ID must be numeric.")
-        return app_request("POST", f"/api/agent/conditions/{condition_id}", {"action": "run_verification"})
+        return app_request("POST", f"/api/agent/conditions/{condition_id}", {"action": "enable_condition"})
+    if name == "link_funded_deal":
+        condition_id = str(arguments["condition_id"])
+        deal_id = str(arguments["deal_id"])
+        if not condition_id.isdigit() or not deal_id.isdigit():
+            raise ValueError("Condition and deal IDs must be numeric.")
+        return app_request("POST", f"/api/agent/conditions/{condition_id}", {"action": "link_funded_deal", "dealId": deal_id})
     raise ValueError(f"Unknown tool: {name}")
 
 

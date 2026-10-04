@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { isAuthorizedAgentRequest } from "@/lib/agent/auth";
 import { createAgentCondition, listAgentConditions } from "@/lib/agent/condition-service";
+import { VerificationPlanError } from "@/lib/verification-plan-service";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -29,6 +30,7 @@ export async function POST(request: Request) {
     return NextResponse.json(condition, { status: 201 });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Could not create the verification plan.";
-    return NextResponse.json({ error: message }, { status: 502 });
+    const status = error instanceof VerificationPlanError ? error.status : 502;
+    return NextResponse.json({ error: message }, { status });
   }
 }

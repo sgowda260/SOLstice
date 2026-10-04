@@ -3,6 +3,7 @@ import type { Condition, Evidence, UploadedDocument, VerificationCheck } from "@
 import { getServerSpacetimeConnection } from "@/lib/spacetime/server";
 import { runVerificationChecks } from "@/lib/verification-service";
 import { generateVerificationPlan } from "@/lib/verification-plan-service";
+import { settleVerifiedCondition, SettlementError } from "@/lib/settlement-service";
 
 function iso(timestamp: { microsSinceUnixEpoch: bigint }) {
   return new Date(Number(timestamp.microsSinceUnixEpoch / 1_000n)).toISOString();
@@ -183,7 +184,100 @@ export async function runAgentVerification(conditionId: bigint) {
     }
   }
   await connection.reducers.resolveCondition({ conditionId, result: outcome.result });
+  await waitFor(() => {
+    const resolved = [...connection.db.condition.iter()].find((row) => row.id === conditionId);
+    return resolved?.finalResult !== undefined ? resolved : undefined;
+  });
   return getAgentCondition(conditionId);
+}
+
+export async function enableAgentCondition(conditionId: bigint) {
+  const connection = await getServerSpacetimeConnection();
+  const condition = [...connection.db.condition.iter()].find((row) => row.id === conditionId);
+  if (!condition) return undefined;
+  if (condition.status !== "planning") throw new Error("Only a planned condition can be enabled. Create a new condition to run fresh checks.");
+
+  const checks = [...connection.db.verificationCheck.iter()]
+    .filter((row) => row.conditionId === conditionId)
+    .sort((a, b) => a.sequence - b.sequence);
+  if (!checks.length) throw new Error("This condition has no verification checks.");
+  if (checks.some((row) => row.status !== "pending")) throw new Error("This condition has already been checked. Create a new condition to run fresh checks.");
+
+  await connection.reducers.enableCondition({ conditionId });
+  await connection.reducers.triggerCondition({ conditionId });
+  const verified = await runAgentVerification(conditionId);
+  if (!verified) return undefined;
+
+  let settlement: "confirmed" | "failed" | "in_progress" | "blocked" | "not_linked" | "condition_not_true" = "condition_not_true";
+  let settlementError: string | undefined;
+  if (verified.condition.finalResult === true) {
+    if (!verified.condition.dealId) {
+      settlement = "not_linked";
+    } else {
+      const dealId = Number(verified.condition.dealId);
+      if (!Number.isSafeInteger(dealId) || dealId <= 0) {
+        settlement = "failed";
+        settlementError = "The linked Devnet deal ID is invalid.";
+      } else {
+        try {
+          await settleVerifiedCondition(conditionId, dealId);
+          settlement = "confirmed";
+        } catch (error) {
+          const refreshed = await getAgentCondition(conditionId);
+          settlement = refreshed?.condition.settlementStatus === "failed" ? "failed"
+            : refreshed?.condition.settlementStatus === "submitted" ? "in_progress" : "blocked";
+          settlementError = error instanceof SettlementError ? error.message : "Devnet settlement failed. Check the deal state and try again.";
+        }
+      }
+    }
+  }
+
+  const current = await getAgentCondition(conditionId);
+  return current ? {
+    ...current,
+    activation: {
+      verificationResult: current.condition.finalResult,
+      settlement,
+      ...(settlementError ? { settlementError } : {}),
+    },
+  } : undefined;
+}
+
+export async function linkAgentFundedDeal(conditionId: bigint, dealId: number) {
+  const connection = await getServerSpacetimeConnection();
+  const condition = [...connection.db.condition.iter()].find((row) => row.id === conditionId);
+  if (!condition) return undefined;
+  if (condition.status === "executed" || condition.settlementStatus === "confirmed") throw new Error("A settled condition cannot be linked to a different deal.");
+  if (condition.dealId !== undefined && condition.dealId !== BigInt(dealId)) throw new Error("This condition is already linked to a different deal. Review it in the verification workspace.");
+
+  const deal = await getDeal(dealId);
+  if (!deal.funded) throw new Error("This Devnet deal is not funded. Fund it in the verification workspace, then try again.");
+  if (deal.released) throw new Error("This Devnet deal has already been released.");
+  await connection.reducers.associateDemoDeal({ conditionId, dealId: BigInt(dealId) });
+
+  let settlement: "confirmed" | "failed" | "in_progress" | "blocked" | "not_attempted" = "not_attempted";
+  let settlementError: string | undefined;
+  if (condition.finalResult === true) {
+    try {
+      await settleVerifiedCondition(conditionId, dealId);
+      settlement = "confirmed";
+    } catch (error) {
+      const refreshed = await getAgentCondition(conditionId);
+      settlement = refreshed?.condition.settlementStatus === "failed" ? "failed"
+        : refreshed?.condition.settlementStatus === "submitted" ? "in_progress" : "blocked";
+      settlementError = error instanceof SettlementError ? error.message : "Devnet settlement failed. Check the deal state and try again.";
+    }
+  }
+
+  const current = await getAgentCondition(conditionId);
+  return current ? {
+    ...current,
+    dealLink: {
+      dealId: String(dealId),
+      settlement,
+      ...(settlementError ? { settlementError } : {}),
+    },
+  } : undefined;
 }
 
 async function waitFor<T>(read: () => T | undefined, attempts = 30): Promise<T | undefined> {
